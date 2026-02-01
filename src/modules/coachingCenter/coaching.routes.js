@@ -1,22 +1,29 @@
 const express = require("express");
 const router = express.Router();
+
 const coachingController = require("./coaching.controller");
 const { protect } = require("../auth/auth.middleware");
 const roleGuard = require("../../middlewares/roleGuard");
 const coachingScope = require("../../middlewares/coachingScope");
 
 /**
+ * ─────────────────────────────────────────────
  * PUBLIC ROUTES
- * Node Initialization
+ * ─────────────────────────────────────────────
  */
+
+// Node Initialization / Registration
+// POST /api/v1/coaching/register
 router.post("/register", coachingController.registerCenter);
 
 /**
- * SUPER-ADMIN ROUTES
- * Global node management and license control
+ * ─────────────────────────────────────────────
+ * SUPER ADMIN COMMAND CENTER
+ * Global node management & de-provisioning
+ * ─────────────────────────────────────────────
  */
 
-// Fetch merged data from 'coachingcenters' and 'users' collections
+// Fetch all centers (used by CentersManagement.jsx)
 router.get(
   "/all",
   protect,
@@ -24,7 +31,8 @@ router.get(
   coachingController.getAllCenters,
 );
 
-// Update subscriptionStatus, paymentProcessed, or deactivate nodes
+// Update center subscription, billing, trial reset
+// PUT /api/v1/coaching/:id
 router.put(
   "/:id",
   protect,
@@ -32,23 +40,39 @@ router.put(
   coachingController.updateCenterStatus,
 );
 
+// De-provision coaching node (hard delete + user cleanup)
+// DELETE /api/v1/coaching/:id
+router.delete(
+  "/:id",
+  protect,
+  roleGuard("super-admin"),
+  coachingController.deleteCenter,
+);
+
 /**
- * COACHING ADMIN ROUTES (Tenant-Specific)
- * Requires 'protect' for auth and 'coachingScope' for data isolation
+ * ─────────────────────────────────────────────
+ * TENANT-SCOPED ROUTES (Coaching Admin / Staff)
+ * Requires authentication + coaching isolation
+ * ─────────────────────────────────────────────
  */
+
+// Apply auth protection to all routes below
 router.use(protect);
 
-// These routes require the coachingScope middleware to identify the center node
-router.use(coachingScope);
+// Update coaching settings (classes, batches, currency, contactNumber)
+// PUT /api/v1/coaching/settings
+router.put(
+  "/settings",
+  coachingScope,
+  roleGuard("admin"),
+  coachingController.updateSettings,
+);
 
-// @route   PUT /api/v1/coaching/settings
-// @desc    Update registry arrays (Classes & Batches)
-router.put("/settings", roleGuard("admin"), coachingController.updateSettings);
-
-// @route   DELETE /api/v1/coaching/settings/:type/:value
-// @desc    Remove a specific data node from settings
+// Remove item from settings arrays (class/batch)
+// DELETE /api/v1/coaching/settings/:type/:value
 router.delete(
   "/settings/:type/:value",
+  coachingScope,
   roleGuard("admin"),
   coachingController.removeFromSettings,
 );

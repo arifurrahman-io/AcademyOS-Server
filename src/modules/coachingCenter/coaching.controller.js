@@ -1,6 +1,7 @@
 const coachingService = require("./coaching.service");
 const Coaching = require("./coaching.model");
-const User = require("../users/user.model"); // Import User model to support aggregation joins
+const User = require("../users/user.model");
+const mongoose = require("mongoose");
 
 /**
  * @desc    Registers a new center and creates an initial admin user
@@ -8,7 +9,6 @@ const User = require("../users/user.model"); // Import User model to support agg
  */
 exports.registerCenter = async (req, res) => {
   try {
-    // Uses atomic transaction via service to create center and admin user
     const coaching = await coachingService.createCenter(req.body);
     res.status(201).json({ success: true, data: coaching });
   } catch (error) {
@@ -17,40 +17,47 @@ exports.registerCenter = async (req, res) => {
 };
 
 /**
- * @desc    Fetch all center nodes with linked admin data for Super-Admin
+ * @desc    Fetch all centers for Super-Admin management
  * @route   GET /api/v1/coaching/all
- * FIX: Merges contact info to resolve "Invalid Date" and missing email issues
+ * Projection updated to include official email, phone, joinedAt, and trialExpiryDate.
  */
+
 exports.getAllCenters = async (req, res) => {
   try {
     const centers = await Coaching.aggregate([
       {
         $lookup: {
           from: "users",
-          localField: "_id",
-          foreignField: "coaching_id",
-          as: "admin_node",
+          localField: "admin_id",
+          foreignField: "_id",
+          as: "admin_details",
         },
       },
       {
         $project: {
-          _id: 1, // <--- CRITICAL: Explicitly include the ID
+          _id: 1,
           name: 1,
           slug: 1,
           subscriptionStatus: 1,
-          paymentProcessed: 1,
+          paymentProcessed: 1, // Project this to remove "Billing Warning"
           createdAt: 1,
-          trialStartDate: 1,
-          // Pull contact info from the first matching user node
-          email: { $arrayElemAt: ["$admin_node.email", 0] },
-          phone: { $arrayElemAt: ["$admin_node.phone", 0] },
+          joinedAt: 1,
+          trialExpiryDate: 1, // Needed for the Trial Health bar
+          email: 1,
+          // FIX: Map the nested DB field to 'phone' for the frontend table
+          phone: {
+            $ifNull: [
+              "$settings.contactNumber",
+              { $arrayElemAt: ["$admin_details.phone", 0] },
+              "N/A",
+            ],
+          },
         },
       },
       { $sort: { createdAt: -1 } },
     ]);
 
-    // Send the array directly or ensure frontend reads the 'data' key
-    res.status(200).json(centers);
+    res.status(200).json({ success: true, data: centers });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -65,12 +72,13 @@ exports.updateSettings = async (req, res) => {
     const { settings } = req.body;
 
     const coaching = await Coaching.findByIdAndUpdate(
-      req.coaching_id, // Identifies center via coachingScope middleware
+      req.coaching_id,
       {
         $set: {
           "settings.classes": settings.classes,
           "settings.batches": settings.batches,
           "settings.currency": settings.currency || "BDT",
+          "settings.contactNumber": settings.contactNumber, // Support updating phone
         },
       },
       { new: true, runValidators: true },
@@ -93,12 +101,12 @@ exports.updateSettings = async (req, res) => {
  */
 exports.removeFromSettings = async (req, res) => {
   try {
-    const { type, value } = req.params; // type = 'classes' or 'batches'
+    const { type, value } = req.params;
     const field = `settings.${type}`;
 
     const coaching = await Coaching.findByIdAndUpdate(
       req.coaching_id,
-      { $pull: { [field]: value } }, // Removes specific value from the array
+      { $pull: { [field]: value } },
       { new: true },
     );
 
@@ -114,10 +122,20 @@ exports.removeFromSettings = async (req, res) => {
  */
 exports.updateCenterStatus = async (req, res) => {
   try {
-    // Allows manual overrides for subscriptionStatus, paymentProcessed, and trialStartDate
+    // If resetting trial, we handle calculation in service or here
+    const updateData = req.body;
+
+    if (updateData.resetTrial) {
+      updateData.trialStartDate = new Date();
+      // Calculate 14 days from now for expiry
+      const expiry = new Date();
+      expiry.setDate(expiry.getDate() + 14);
+      updateData.trialExpiryDate = expiry;
+    }
+
     const coaching = await Coaching.findByIdAndUpdate(
       req.params.id,
-      { $set: req.body },
+      { $set: updateData },
       { new: true, runValidators: true },
     );
 
@@ -134,16 +152,48 @@ exports.updateCenterStatus = async (req, res) => {
 };
 
 /**
- * @desc    Delete a coaching node and purge its registry (Super-Admin Only)
+ * @desc    Delete a coaching node
  */
 exports.deleteCenter = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
-    await Coaching.findByIdAndDelete(req.params.id);
-    res.status(200).json({
+    session.startTransaction();
+
+    const centerId = req.params.id;
+
+    if (!mongoose.Types.ObjectId.isValid(centerId)) {
+      await session.abortTransaction();
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid center ID" });
+    }
+
+    // 1️⃣ Delete all users under this coaching center
+    await User.deleteMany({ coaching_id: centerId }, { session });
+
+    // 2️⃣ Delete the coaching center
+    const deletedCenter = await Coaching.findByIdAndDelete(centerId, {
+      session,
+    });
+
+    if (!deletedCenter) {
+      throw new Error("Center not found");
+    }
+
+    await session.commitTransaction();
+
+    return res.status(200).json({
       success: true,
-      message: "Center node purged from registry",
+      message: "Node and associated users decommissioned successfully",
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    await session.abortTransaction();
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  } finally {
+    session.endSession();
   }
 };

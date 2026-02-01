@@ -17,6 +17,11 @@ const coachingSchema = new mongoose.Schema(
       lowercase: true,
       required: true,
     },
+    // The official email for the coaching center
+    email: {
+      type: String,
+      required: true,
+    },
     // Linked to the primary admin in the users collection
     admin_id: {
       type: mongoose.Schema.Types.ObjectId,
@@ -24,13 +29,23 @@ const coachingSchema = new mongoose.Schema(
     },
     subscriptionStatus: {
       type: String,
-      enum: ["trial", "paid", "active", "expired", "suspended", "deactivated"], // Updated to include your status needs
-      default: "trial", //
+      enum: ["trial", "paid", "active", "expired", "suspended", "deactivated"],
+      default: "trial",
     },
-    // Used to calculate "Days Remaining" in TrialStatus.jsx
+    // Explicit Join Date (fallback for createdAt)
+    joinedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    // Used to calculate "Days Remaining"
     trialStartDate: {
       type: Date,
-      default: Date.now, //
+      default: Date.now,
+    },
+    // Explicit Trial Expiry Date (e.g., trialStartDate + 14 days)
+    trialExpiryDate: {
+      type: Date,
+      required: true,
     },
     // Super-Admin Control: Warning logic for unprocessed payments
     paymentProcessed: {
@@ -40,10 +55,10 @@ const coachingSchema = new mongoose.Schema(
     settings: {
       logoUrl: { type: String },
       address: { type: String },
-      contactNumber: { type: String },
+      contactNumber: { type: String }, // Used as the primary phone
       currency: {
         type: String,
-        default: "BDT", //
+        default: "BDT",
       },
       // Registry Data Persistence
       classes: [{ type: String }],
@@ -51,16 +66,32 @@ const coachingSchema = new mongoose.Schema(
     },
   },
   {
-    timestamps: true, // Automatically handles createdAt and updatedAt
+    timestamps: true, // Handles createdAt and updatedAt
   },
 );
 
-// Middleware to automatically generate a slug from the name if not provided
-coachingSchema.pre("save", function (next) {
+/**
+ * Pre-save middleware:
+ * 1. Generates slug from name.
+ * 2. Automatically sets trialExpiryDate to 14 days after trialStartDate if not set.
+ */
+coachingSchema.pre("validate", async function () {
+  // Generate Slug
   if (this.name && !this.slug) {
-    this.slug = this.name.toLowerCase().split(" ").join("-");
+    this.slug = this.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "-")
+      .replace(/-+/g, "-");
   }
-  next();
+
+  // Set default Trial Expiry (14 days) if not provided
+  if (!this.trialExpiryDate && this.trialStartDate) {
+    const expiry = new Date(this.trialStartDate);
+    expiry.setDate(expiry.getDate() + 14);
+    this.trialExpiryDate = expiry;
+  }
+
+  // No need to call next() here
 });
 
 module.exports = mongoose.model("CoachingCenter", coachingSchema);

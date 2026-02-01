@@ -1,37 +1,62 @@
 const express = require("express");
 const router = express.Router();
-const subController = require("./subscription.controller");
+
+const subscriptionController = require("./subscription.controller");
 const { protect } = require("../auth/auth.middleware");
 const roleGuard = require("../../middlewares/roleGuard");
+const coachingScope = require("../../middlewares/coachingScope");
 
 /**
- * @desc    Subscription & License Management
- * Scoped by Super-Admin (Global) and Coaching Admin (Tenant-Specific)
+ * Role constants
  */
-
-// All subscription routes require a valid JWT token
-router.use(protect);
-
-/**
- * @route   GET /api/v1/subscriptions/monitor-all
- * @desc    Global overview of all institute subscription statuses
- * @access  Private (Super-Admin Only)
- */
-router.get(
-  "/monitor-all",
-  roleGuard("super-admin"),
-  subController.getAdminDashboard,
-);
+const ROLES = Object.freeze({
+  SUPER_ADMIN: "super-admin",
+  ADMIN: "admin",
+});
 
 /**
- * @route   POST /api/v1/subscriptions/upgrade-center
- * @desc    Coaching Admins submit payment proof; Super-Admins can manually execute upgrades
- * @access  Private (Admin, Super-Admin)
+ * ✅ Coaching Admin Routes
+ * - trial expire হলেও login allowed
+ * - payment submit allowed
  */
 router.post(
   "/upgrade-center",
-  roleGuard("admin", "super-admin"),
-  subController.manualUpgrade,
+  protect,
+  coachingScope,
+  roleGuard(ROLES.ADMIN, ROLES.SUPER_ADMIN),
+  subscriptionController.upgradeCenter,
+);
+
+router.get(
+  "/my-status",
+  protect,
+  coachingScope,
+  roleGuard(ROLES.ADMIN, ROLES.SUPER_ADMIN),
+  subscriptionController.myStatus,
+);
+
+/**
+ * ✅ Super Admin Routes
+ */
+router.get(
+  "/monitor-all",
+  protect,
+  roleGuard(ROLES.SUPER_ADMIN),
+  subscriptionController.monitorAll,
+);
+
+router.get(
+  "/payments",
+  protect,
+  roleGuard(ROLES.SUPER_ADMIN),
+  subscriptionController.listPayments,
+);
+
+router.put(
+  "/payments/:paymentId/verify",
+  protect,
+  roleGuard(ROLES.SUPER_ADMIN),
+  subscriptionController.verifyPayment,
 );
 
 module.exports = router;

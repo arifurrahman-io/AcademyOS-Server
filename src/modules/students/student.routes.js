@@ -1,36 +1,90 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const studentController = require('./student.controller');
-const { protect } = require('../auth/auth.middleware');
-const coachingScope = require('../../middlewares/coachingScope');
+
+const studentController = require("./student.controller");
+const { protect } = require("../auth/auth.middleware");
+const coachingScope = require("../../middlewares/coachingScope");
+const subscriptionGuard = require("../../middlewares/subscriptionGuard");
+const roleGuard = require("../../middlewares/roleGuard");
+const mongoose = require("mongoose");
+
+/**
+ * Role constants
+ */
+const ROLES = Object.freeze({
+  SUPER_ADMIN: "super-admin",
+  ADMIN: "admin",
+  TEACHER: "teacher",
+  STAFF: "staff",
+});
+
+/**
+ * Validate ObjectId param (prevents invalid :id causing cast errors)
+ */
+const validateObjectIdParam =
+  (paramName = "id") =>
+  (req, res, next) => {
+    const value = req.params?.[paramName];
+    if (!value || !mongoose.Types.ObjectId.isValid(value)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid ${paramName}`,
+        code: "INVALID_OBJECT_ID",
+      });
+    }
+    return next();
+  };
 
 /**
  * Global Middlewares
- * - protect: Ensures the user is logged in via JWT
- * - coachingScope: Attaches req.coaching_id based on the user's center
+ * - protect: JWT auth
+ * - coachingScope: attaches req.coaching_id (tenant isolation)
+ * - subscriptionGuard: blocks expired trial/subscription (402)
  */
 router.use(protect);
 router.use(coachingScope);
+router.use(subscriptionGuard);
 
 /**
  * Collection Routes
- * GET  /api/v1/students - Fetch all students for the center
- * POST /api/v1/students - Enroll a new student
+ * GET  /api/v1/students  -> list
+ * POST /api/v1/students  -> create
+ *
+ * Access:
+ * - admin: full
+ * - teacher/staff: allow list/create (adjust if you want)
  */
-router.route('/')
-  .get(studentController.getStudents)
-  .post(studentController.createStudent);
+router
+  .route("/")
+  .get(
+    roleGuard(ROLES.ADMIN, ROLES.TEACHER, ROLES.STAFF, ROLES.SUPER_ADMIN),
+    studentController.getStudents,
+  )
+  .post(
+    roleGuard(ROLES.ADMIN, ROLES.TEACHER, ROLES.SUPER_ADMIN),
+    studentController.createStudent,
+  );
 
 /**
- * Single Resource Routes (Dynamic ID)
- * FIX: This section enables the functionality for Profile, Edit, and Delete
- * GET    /api/v1/students/:id - Fetch a specific student's data
- * PUT    /api/v1/students/:id - Update student details
- * DELETE /api/v1/students/:id - Remove student from registry
+ * Single Resource Routes
+ * GET    /api/v1/students/:id
+ * PUT    /api/v1/students/:id
+ * DELETE /api/v1/students/:id
  */
-router.route('/:id')
-  .get(studentController.getStudentById) // Used for Profile View & Edit Pre-fill
-  .put(studentController.updateStudent)   // Used for saving Edits
-  .delete(studentController.deleteStudent); // Used for Deletion
+router
+  .route("/:id")
+  .all(validateObjectIdParam("id"))
+  .get(
+    roleGuard(ROLES.ADMIN, ROLES.TEACHER, ROLES.STAFF, ROLES.SUPER_ADMIN),
+    studentController.getStudentById,
+  )
+  .put(
+    roleGuard(ROLES.ADMIN, ROLES.TEACHER, ROLES.SUPER_ADMIN),
+    studentController.updateStudent,
+  )
+  .delete(
+    roleGuard(ROLES.ADMIN, ROLES.SUPER_ADMIN),
+    studentController.deleteStudent,
+  );
 
 module.exports = router;

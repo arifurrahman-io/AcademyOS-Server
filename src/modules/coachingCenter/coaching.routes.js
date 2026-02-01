@@ -5,6 +5,36 @@ const coachingController = require("./coaching.controller");
 const { protect } = require("../auth/auth.middleware");
 const roleGuard = require("../../middlewares/roleGuard");
 const coachingScope = require("../../middlewares/coachingScope");
+const mongoose = require("mongoose");
+const subscriptionGuard = require("../../middlewares/subscriptionGuard");
+
+/**
+ * Role constants
+ */
+const ROLES = Object.freeze({
+  SUPER_ADMIN: "super-admin",
+  ADMIN: "admin",
+  TEACHER: "teacher",
+  STAFF: "staff",
+});
+
+/**
+ * Validate ObjectId param middleware
+ */
+const validateObjectIdParam =
+  (paramName = "id") =>
+  (req, res, next) => {
+    const value = req.params?.[paramName];
+
+    if (!value || !mongoose.Types.ObjectId.isValid(value)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid ${paramName}`,
+      });
+    }
+
+    return next();
+  };
 
 /**
  * ─────────────────────────────────────────────
@@ -12,69 +42,68 @@ const coachingScope = require("../../middlewares/coachingScope");
  * ─────────────────────────────────────────────
  */
 
-// Node Initialization / Registration
 // POST /api/v1/coaching/register
 router.post("/register", coachingController.registerCenter);
 
 /**
  * ─────────────────────────────────────────────
- * SUPER ADMIN COMMAND CENTER
- * Global node management & de-provisioning
+ * AUTH REQUIRED ROUTES
  * ─────────────────────────────────────────────
  */
-
-// Fetch all centers (used by CentersManagement.jsx)
-router.get(
-  "/all",
-  protect,
-  roleGuard("super-admin"),
-  coachingController.getAllCenters,
-);
-
-// Update center subscription, billing, trial reset
-// PUT /api/v1/coaching/:id
-router.put(
-  "/:id",
-  protect,
-  roleGuard("super-admin"),
-  coachingController.updateCenterStatus,
-);
-
-// De-provision coaching node (hard delete + user cleanup)
-// DELETE /api/v1/coaching/:id
-router.delete(
-  "/:id",
-  protect,
-  roleGuard("super-admin"),
-  coachingController.deleteCenter,
-);
+router.use(protect);
 
 /**
  * ─────────────────────────────────────────────
- * TENANT-SCOPED ROUTES (Coaching Admin / Staff)
- * Requires authentication + coaching isolation
+ * TENANT-SCOPED ROUTES (Admin / Support)
+ * IMPORTANT: Static routes BEFORE "/:id"
  * ─────────────────────────────────────────────
  */
 
-// Apply auth protection to all routes below
-router.use(protect);
-
-// Update coaching settings (classes, batches, currency, contactNumber)
 // PUT /api/v1/coaching/settings
 router.put(
   "/settings",
   coachingScope,
-  roleGuard("admin"),
+  subscriptionGuard,
+  roleGuard(ROLES.ADMIN, ROLES.SUPER_ADMIN),
   coachingController.updateSettings,
 );
 
-// Remove item from settings arrays (class/batch)
 // DELETE /api/v1/coaching/settings/:type/:value
 router.delete(
   "/settings/:type/:value",
   coachingScope,
-  roleGuard("admin"),
+  subscriptionGuard,
+  roleGuard(ROLES.ADMIN, ROLES.SUPER_ADMIN),
   coachingController.removeFromSettings,
+);
+
+/**
+ * ─────────────────────────────────────────────
+ * SUPER ADMIN COMMAND CENTER
+ * ─────────────────────────────────────────────
+ */
+
+// GET /api/v1/coaching/all
+router.get(
+  "/all",
+  roleGuard(ROLES.SUPER_ADMIN),
+  coachingController.getAllCenters,
+);
+
+// PUT /api/v1/coaching/:id
+router.put(
+  "/:id",
+  validateObjectIdParam("id"),
+  roleGuard(ROLES.SUPER_ADMIN),
+  coachingController.updateCenterStatus,
+);
+
+// DELETE /api/v1/coaching/:id
+router.delete(
+  "/:id",
+  validateObjectIdParam("id"),
+  roleGuard(ROLES.SUPER_ADMIN),
+  coachingController.deleteCenter,
 );
 
 module.exports = router;

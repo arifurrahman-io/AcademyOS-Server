@@ -1,19 +1,57 @@
-const coachingScope = (req, res, next) => {
-  // 1. Super-Admins have global access, so we don't force a scope unless they provide one
-  if (req.user.role === 'super-admin') {
-    if (req.query.coaching_id) {
-      req.coaching_id = req.query.coaching_id;
+const mongoose = require("mongoose");
+
+/**
+ * coachingScope
+ * ---------------------------------------------------------
+ * Sets req.coaching_id for tenant-scoped controllers.
+ * Expects protect() to attach req.user and a coaching id field.
+ *
+ * Supports these common user fields:
+ * - req.user.coaching_id  (your schema uses this)
+ * - req.user.coachingId
+ * - req.user.center_id
+ * - req.user.centerId
+ */
+module.exports = (req, res, next) => {
+  try {
+    // Debug (keep for now, remove later)
+    console.log("✅ coachingScope hit:", req.method, req.originalUrl);
+    console.log("USER:", {
+      id: req.user?._id,
+      role: req.user?.role,
+      coaching_id: req.user?.coaching_id,
+      coachingId: req.user?.coachingId,
+    });
+
+    const coachingId =
+      req.user?.coaching_id ||
+      req.user?.coachingId ||
+      req.user?.center_id ||
+      req.user?.centerId;
+
+    if (!coachingId) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: coaching scope missing for this user",
+      });
     }
+
+    if (!mongoose.Types.ObjectId.isValid(coachingId)) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: invalid coaching scope",
+      });
+    }
+
+    // normalize for controllers
+    req.coaching_id = coachingId;
+
     return next();
+  } catch (err) {
+    console.error("COACHING_SCOPE_ERROR:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Coaching scope failed",
+    });
   }
-
-  // 2. For everyone else, their access is strictly tied to their own center
-  if (!req.user.coaching_id) {
-    return res.status(403).json({ message: 'User is not associated with any coaching center' });
-  }
-
-  req.coaching_id = req.user.coaching_id;
-  next();
 };
-
-module.exports = coachingScope;

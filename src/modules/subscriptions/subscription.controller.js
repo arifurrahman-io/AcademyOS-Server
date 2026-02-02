@@ -12,18 +12,19 @@ const send = (res, status, payload) => res.status(status).json(payload);
 const badRequest = (res, message, extra = {}) =>
   send(res, 400, { success: false, message, ...extra });
 
-const serverError = (res, message = "Internal server error", extra = {}) =>
-  send(res, 500, { success: false, message, ...extra });
+/**
+ * Small sanitizers to prevent payload drift / quotes
+ */
+const safeStr = (v) => (v == null ? "" : String(v).trim());
+const normalizeProvider = (v) => safeStr(v).toLowerCase();
 
 /**
  * Coaching admin submits payment proof
  * POST /api/v1/subscriptions/upgrade-center
  *
- * body: {
- *   method: "bKash" | "Nagad",
- *   senderNumber: string,
- *   transactionId: string
- * }
+ * body (supported):
+ *  A) { method, senderNumber, transactionId, amount? }
+ *  B) { provider, senderNumber, trxId, amount? }
  */
 exports.upgradeCenter = async (req, res) => {
   try {
@@ -34,19 +35,51 @@ exports.upgradeCenter = async (req, res) => {
       return badRequest(res, "Missing coaching_id (coachingScope failed)");
     if (!userId) return badRequest(res, "Missing user id (protect failed)");
 
-    const { method, senderNumber, transactionId } = req.body || {};
+    const body = req.body || {};
 
-    if (!method || !senderNumber || !transactionId) {
+    // ✅ accept both names
+    const provider = normalizeProvider(body.method || body.provider);
+    const senderNumber = safeStr(body.senderNumber);
+    const transactionId = safeStr(body.transactionId || body.trxId);
+    const amount =
+      body.amount !== undefined && body.amount !== null
+        ? Number(body.amount)
+        : undefined;
+
+    if (!provider || !senderNumber || !transactionId) {
       return badRequest(
         res,
-        "method, senderNumber, transactionId are required",
+        "method/provider, senderNumber, transactionId/trxId are required",
+        {
+          expected: {
+            method: "bkash | nagad",
+            senderNumber: "017XXXXXXXX",
+            transactionId: "ABC123...",
+            amount: "(optional) number",
+          },
+        },
       );
+    }
+
+    if (!["bkash", "nagad"].includes(provider)) {
+      return badRequest(res, "Invalid provider. Use bkash or nagad");
+    }
+
+    if (amount !== undefined) {
+      if (!Number.isFinite(amount) || amount < 1) {
+        return badRequest(res, "Invalid amount");
+      }
     }
 
     const payment = await subscriptionService.submitPaymentProof({
       coachingId,
       userId,
-      payload: { method, senderNumber, transactionId },
+      payload: {
+        method: provider, // keep service happy (it maps to provider)
+        senderNumber,
+        transactionId,
+        amount,
+      },
     });
 
     return send(res, 201, {
@@ -55,7 +88,6 @@ exports.upgradeCenter = async (req, res) => {
       data: payment,
     });
   } catch (e) {
-    // service may throw with statusCode/code
     const status = e.statusCode || 400;
     return send(res, status, {
       success: false,
@@ -71,7 +103,6 @@ exports.upgradeCenter = async (req, res) => {
  */
 exports.monitorAll = async (req, res) => {
   try {
-    // service MUST exist: subscriptionService.getMonitorAll()
     const data = await subscriptionService.getMonitorAll();
     return send(res, 200, { success: true, data });
   } catch (e) {
@@ -86,12 +117,24 @@ exports.monitorAll = async (req, res) => {
 
 /**
  * Super-admin list payments
- * GET /api/v1/subscriptions/payments?status=pending|approved|rejected&q=
+ * GET /api/v1/subscriptions/payments?status=pending|verified|rejected&q=&page=&limit=
  */
 exports.listPayments = async (req, res) => {
   try {
-    const { status = "pending", q = "" } = req.query || {};
-    const data = await subscriptionService.listPayments({ status, q });
+    const {
+      status = "pending",
+      q = "",
+      page = "1",
+      limit = "20",
+    } = req.query || {};
+
+    const data = await subscriptionService.listPayments({
+      status,
+      q,
+      page,
+      limit,
+    });
+
     return send(res, 200, { success: true, data });
   } catch (e) {
     const status = e.statusCode || 500;
@@ -119,7 +162,7 @@ exports.verifyPayment = async (req, res) => {
       return badRequest(res, "Missing superAdminId (protect failed)");
     if (!action) return badRequest(res, "Missing action");
 
-    const normalizedAction = String(action).trim().toLowerCase();
+    const normalizedAction = safeStr(action).toLowerCase();
     if (!["verify", "reject"].includes(normalizedAction)) {
       return badRequest(res, 'Invalid action. Use "verify" or "reject"');
     }
@@ -128,7 +171,7 @@ exports.verifyPayment = async (req, res) => {
       paymentId,
       action: normalizedAction,
       superAdminId,
-      note: note || "",
+      note: note ? safeStr(note) : "",
     });
 
     return send(res, 200, {

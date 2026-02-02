@@ -52,6 +52,14 @@ exports.getAllCenters = async (req, res) => {
               "N/A",
             ],
           },
+          subscription: {
+            plan: "$subscription.plan",
+            status: "$subscription.status",
+            startAt: "$subscription.startAt",
+            endAt: "$subscription.endAt",
+          },
+
+          settings: 1,
         },
       },
       { $sort: { createdAt: -1 } },
@@ -195,5 +203,26 @@ exports.deleteCenter = async (req, res) => {
     });
   } finally {
     session.endSession();
+  }
+};
+
+// coaching.controller.js
+exports.getMyCenter = async (req, res) => {
+  try {
+    const coaching = await Coaching.findById(req.coaching_id)
+      .select(
+        "name slug email subscriptionStatus trialStartDate trialExpiryDate paymentProcessed subscription settings",
+      )
+      .lean();
+
+    if (!coaching) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Center not found" });
+    }
+
+    return res.status(200).json({ success: true, data: coaching });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
   }
 };

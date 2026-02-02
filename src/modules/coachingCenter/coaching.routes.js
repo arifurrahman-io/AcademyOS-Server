@@ -68,6 +68,13 @@ router.put(
   coachingController.updateSettings,
 );
 
+router.get(
+  "/me",
+  coachingScope,
+  roleGuard("admin", "teacher"),
+  coachingController.getMyCenter,
+);
+
 // DELETE /api/v1/coaching/settings/:type/:value
 router.delete(
   "/settings/:type/:value",

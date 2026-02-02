@@ -1,8 +1,21 @@
-const Coaching = require("../modules/coachingCenter/coaching.model"); // path ঠিক করুন
+const Coaching = require("../modules/coachingCenter/coaching.model");
 
+/**
+ * Subscription Guard
+ * Blocks only EXPIRED states.
+ *
+ * Allowed:
+ *  - active
+ *  - trial_active
+ *  - payment_pending
+ *
+ * Blocked:
+ *  - trial_expired
+ *  - expired
+ */
 module.exports = async function subscriptionGuard(req, res, next) {
   try {
-    // super-admin always allowed
+    // ✅ super-admin always allowed
     const role = String(req.user?.role || "").toLowerCase();
     if (role === "super-admin") return next();
 
@@ -16,7 +29,7 @@ module.exports = async function subscriptionGuard(req, res, next) {
     }
 
     const center = await Coaching.findById(coachingId)
-      .select("subscriptionStatus trialExpiryDate subscriptionEndDate")
+      .select("subscription subscriptionStatus trialExpiryDate createdAt")
       .lean();
 
     if (!center) {
@@ -28,30 +41,48 @@ module.exports = async function subscriptionGuard(req, res, next) {
     }
 
     const now = new Date();
+    const sub = center.subscription || {};
 
-    // ✅ Active subscription check
-    if (
-      center.subscriptionStatus === "active" &&
-      center.subscriptionEndDate &&
-      new Date(center.subscriptionEndDate) > now
-    ) {
-      return next();
+    /**
+     * Normalize effective status
+     */
+    let status = String(sub.status || "trial_active").toLowerCase();
+
+    // yearly expiry check
+    if (status === "active" && sub.endAt && new Date(sub.endAt) <= now) {
+      status = "expired";
     }
 
-    // ✅ Trial check
+    /**
+     * Trial expiry fallback (legacy compatibility)
+     */
     if (
-      center.subscriptionStatus === "trial" &&
+      status === "trial_active" &&
       center.trialExpiryDate &&
-      new Date(center.trialExpiryDate) > now
+      new Date(center.trialExpiryDate) <= now
+    ) {
+      status = "trial_expired";
+    }
+
+    /**
+     * ✅ ALLOWED STATES
+     */
+    if (
+      status === "active" ||
+      status === "trial_active" ||
+      status === "payment_pending"
     ) {
       return next();
     }
 
-    // Otherwise locked (but login allowed)
+    /**
+     * ❌ BLOCKED STATES
+     */
     return res.status(402).json({
       success: false,
       message: "Instance Restricted: Subscription required",
       code: "SUBSCRIPTION_REQUIRED",
+      status, // helpful for frontend debugging
     });
   } catch (err) {
     console.error("SUBSCRIPTION_GUARD_ERROR:", err);

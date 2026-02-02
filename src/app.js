@@ -9,19 +9,17 @@ const errorHandler = require("./middlewares/errorHandler");
 const app = express();
 
 // 1. SECURITY & LOGGING
-app.use(helmet()); // Sets various HTTP headers for security
-app.use(morgan("dev")); // Request logging
+app.use(helmet());
+app.use(morgan("dev"));
 
 // 2. DYNAMIC CORS CONFIGURATION
 const allowedOrigins = [
-  "http://localhost:5173", // Local development
-  "https://academyos-psi.vercel.app", // REPLACE with your actual Vercel URL
-  // You can also use process.env.CLIENT_URL if you set it in Render environment variables
+  "http://localhost:5173",
+  "https://academyos-psi.vercel.app",
 ];
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl)
     if (!origin) return callback(null, true);
 
     if (
@@ -42,15 +40,18 @@ const corsOptions = {
     "Authorization",
     "X-Requested-With",
     "Accept",
+    "Cache-Control", // ✅ Added to fix the specific Vercel block
+    "Pragma", // ✅ Added for legacy browser compatibility
+    "Expires", // ✅ Added for cache handling
   ],
   exposedHeaders: ["Content-Length", "X-Response-Time"],
-  maxAge: 86400, // 24 hours cache for preflight requests
+  maxAge: 86400,
 };
 
 app.use(cors(corsOptions));
 
 // 3. MIDDLEWARES
-// Fix for Express 5 path-to-regexp and handle preflight for all routes
+// Express 5 regex for preflight handling
 app.options(/(.*)/, cors(corsOptions));
 
 app.use(express.json({ limit: "10mb" }));
